@@ -1,69 +1,56 @@
 import pdfplumber
 import re
-import os
-import pandas as pd
 
-def extract_data(pdf_path):
-    with pdfplumber.open(pdf_path) as pdf:
-        text = "\n".join([p.extract_text() for p in pdf.pages])
+def extract_invoice(file_path):
+    result = {}
 
-    # --- Vendor ---
-    vendor = re.search(r"Nama:\s*(.+)", text)
-    
-    # --- Invoice Number (multi format) ---
-    invoice_number = (
-        re.search(r"INVOICE #\s*(.+)", text) or
-        re.search(r"Invoice number:\s*(.+)", text) or
-        re.search(r"Invoice No\s*:\s*(.+)", text)
-    )
+    with pdfplumber.open(file_path) as pdf:
+        text = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
 
-    # --- Invoice Date ---
-    invoice_date = (
-        re.search(r"Tanggal Invoice\s*:\s*(.+)", text) or
-        re.search(r"Invoice date\s*[:]*\s*(.+)", text) or
-        re.search(r"\:\s*(\d{2} \w+ \d{4})", text)
-    )
+    # 🔑 Invoice Number
+    inv = re.search(r'INV/[A-Z/0-9]+', text)
+    if inv:
+        result['invoice_no'] = inv.group()
 
-    # --- Description ---
-    description = (
-        re.search(r"Tagihan Pra Bayar.*", text) or
-        re.search(r"Google Cloud", text) or
-        re.search(r"Connectivity.*", text)
-    )
+    # 📅 Tanggal
+    date = re.search(r'Tanggal Invoice\s*:\s*(.*)', text)
+    if date:
+        result['invoice_date'] = date.group(1).strip()
 
-    # --- Amount ---
-    amount = (
-        re.search(r"Jumlah Tagihan\s*([\d\.,]+)", text) or
-        re.search(r"Total amount due.*IDR\s*([\d\.,]+)", text) or
-        re.search(r"Grand Total\s*([\d\.,]+)", text)
-    )
+    due = re.search(r'Tanggal Jatuh Tempo\s*:\s*(.*)', text)
+    if due:
+        result['due_date'] = due.group(1).strip()
 
-    # --- Faktur Pajak ---
-    faktur = re.search(r"Kode dan Nomor Seri Faktur Pajak:\s*(\d+)", text)
+    # 💰 Total
+    total = re.search(r'Jumlah Tagihan\s*([\d.,]+)', text)
+    if total:
+        result['total'] = total.group(1)
 
-    return {
-        "Nama Vendor": vendor.group(1) if vendor else "",
-        "Invoice Number": invoice_number.group(1) if invoice_number else "",
-        "Invoice Date": invoice_date.group(1) if invoice_date else "",
-        "Description": description.group(0) if description else "",
-        "Amount": amount.group(1) if amount else "",
-        "Faktur Pajak": faktur.group(1) if faktur else "",
-        "Link File": f"https://github.com/USERNAME/REPO/blob/main/{pdf_path}"
-    }
+    # 💸 PPN
+    ppn = re.search(r'PPN.*\s([\d.,]+)', text)
+    if ppn:
+        result['ppn'] = ppn.group(1)
 
+    # 📦 Qty
+    qty = re.search(r'untuk\s*(\d+)\s*orang', text)
+    if qty:
+        result['qty'] = qty.group(1)
 
-# --- LOOP SEMUA PDF ---
-folder = "data"
-all_data = []
+    # 🏢 Customer
+    cust = re.search(r'Ditujukan kepada\s*:\s*(.*?)\n', text)
+    if cust:
+        result['customer'] = cust.group(1)
 
-for file in os.listdir(folder):
-    if file.endswith(".pdf"):
-        path = os.path.join(folder, file)
-        data = extract_data(path)
-        all_data.append(data)
+    return result
 
-# --- SIMPAN KE EXCEL ---
-df = pd.DataFrame(all_data)
-df.to_excel("rekap.xlsx", index=False)
+import streamlit as st
 
-print("✅ Rekap selesai!")
+uploaded_file = st.file_uploader("Upload Invoice", type="pdf")
+
+if uploaded_file:
+    with open("temp.pdf", "wb") as f:
+        f.write(uploaded_file.read())
+
+    data = extract_invoice("temp.pdf")
+
+    st.json(data)
